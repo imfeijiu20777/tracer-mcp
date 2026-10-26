@@ -1,0 +1,13 @@
+[package]
+name = "tracer-common"
+version.workspace=true
+edition = "2024"
+
+[dependencies]
+iroh.workspace = true
+postcard.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+futures-util.workspace = true
+anyhow.workspace=true
+serde.workspace = true

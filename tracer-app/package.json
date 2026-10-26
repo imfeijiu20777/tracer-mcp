@@ -1,0 +1,29 @@
+{
+  "name": "tracer-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "vue": "^3.5.13",
+    "quasar": "^2.17.4",
+    "@quasar/extras": "^1.16.13",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-dialog": "^2"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.7",
+    "@quasar/vite-plugin": "^1.9.0",
+    "sass-embedded": "^1.83.0",
+    "typescript": "~6.0.3",
+    "vite": "^8.0.16",
+    "vue-tsc": "^3.3.5",
+    "@tauri-apps/cli": "^2"
+  }
+}

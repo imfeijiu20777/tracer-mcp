@@ -1,0 +1,166 @@
+/* ===== 黑白线条 (wireframe) 全局主题 ===== */
+/* 由 main.ts 引入，供 App 与各子组件共用（非 scoped） */
+
+.wf-bg {
+  background: #ffffff;
+  color: #000000;
+}
+
+/* 头部 */
+.wf-header {
+  background: #ffffff;
+  color: #000000;
+  border-bottom: 1px solid #000000;
+}
+.wf-title {
+  font-weight: 700;
+  letter-spacing: 0.35em;
+  font-size: 16px;
+}
+.wf-badge {
+  border: 1px solid #000000;
+  font-weight: 700;
+}
+.wf-badges {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 连接状态：红/绿圆点 + 英文类型 */
+.wf-conn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 10px;
+}
+.wf-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.wf-dot--on {
+  background: #21ba45;
+}
+.wf-dot--off {
+  background: #db2828;
+}
+.wf-conn-text {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+/* 页面与列表卡片：只有描边、无阴影 */
+.wf-page {
+  padding: 12px;
+}
+.wf-list {
+  border: 1px solid #000000;
+}
+.wf-card {
+  border-bottom: 1px solid #000000;
+}
+.wf-card:last-child {
+  border-bottom: none;
+}
+.wf-card-title {
+  font-weight: 600;
+  color: #000000;
+}
+.wf-card-sub {
+  color: #555555;
+}
+
+/* 下载进度面板：wireframe 描边进度条 */
+.wf-downloads {
+  margin-bottom: 12px;
+}
+.wf-progress {
+  height: 10px;
+  border: 1px solid #000000;
+  background: #ffffff;
+  margin: 6px 0;
+}
+.wf-progress-bar {
+  height: 100%;
+  background: #000000;
+  transition: width 0.2s ease;
+}
+
+/* 空态 */
+.wf-empty {
+  min-height: 60vh;
+  color: #000000;
+}
+.wf-empty-icon {
+  opacity: 0.35;
+}
+.wf-empty-text {
+  margin-top: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+}
+.wf-empty-sub {
+  margin-top: 4px;
+  color: #777;
+  font-size: 12px;
+}
+
+/* 弹框 */
+.wf-dialog {
+  width: 340px;
+  max-width: 90vw;
+  border: 1px solid #000000;
+  border-radius: 0;
+  background: #ffffff;
+  color: #000000;
+}
+.wf-dialog-title {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.wf-dialog-sub {
+  font-size: 12px;
+  color: #666;
+  margin-top: 2px;
+}
+.wf-input .q-field__control {
+  border: 1px solid #000000;
+  border-radius: 0;
+}
+
+/* Ticket 输入框：灰色背景 + 加高 */
+.wf-ticket-input .q-field__native,
+.wf-ticket-input textarea {
+  min-height: 96px;
+  color: #000000;
+}
+
+/* 详情 */
+.wf-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px dashed #cccccc;
+}
+.wf-detail-row:last-child {
+  border-bottom: none;
+}
+.wf-detail-key {
+  color: #777;
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+.wf-detail-val {
+  color: #000;
+  font-weight: 600;
+  word-break: break-all;
+  text-align: right;
+}
+.wf-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
