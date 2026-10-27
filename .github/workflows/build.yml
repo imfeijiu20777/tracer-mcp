@@ -97,7 +97,7 @@ jobs:
           VERSION=$(grep -m1 '^version' ../Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Build tracer-app (Tauri, Windows, 免安装绿色版)
+      - name: Build tracer-app
         run: pnpm tauri build --no-bundle
 
       - name: Collect artifacts
