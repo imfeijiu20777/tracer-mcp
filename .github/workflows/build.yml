@@ -1,0 +1,144 @@
+name: Build
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ------------------------------------------------------------------
+  # 打包 Linux 平台的 tracer-mcp (Rust 二进制)
+  # ------------------------------------------------------------------
+  tracer-mcp-linux:
+    name: tracer-mcp (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Read version
+        id: ver
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build tracer-mcp (release)
+        run: cargo build --release -p tracer-mcp
+
+      - name: Package artifact
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          NAME="tracer-mcp-v${VERSION}-linux-x86_64"
+          mkdir -p "dist/$NAME"
+          cp target/release/tracer-mcp "dist/$NAME/"
+          cp README.md LICENSE "dist/$NAME/" 2>/dev/null || true
+          tar -C dist -czf "dist/${NAME}.tar.gz" "$NAME"
+          echo "ASSET=dist/${NAME}.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracer-mcp-linux-x86_64
+          path: ${{ env.ASSET }}
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # 打包 Windows 平台的 tracer-app (Tauri 应用)
+  # ------------------------------------------------------------------
+  tracer-app-windows:
+    name: tracer-app (Windows)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: tracer-app
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: tracer-app/pnpm-lock.yaml
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Read version
+        id: ver
+        shell: bash
+        run: |
+          VERSION=$(grep -m1 '^version' ../Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Build tracer-app (Tauri, Windows, 免安装绿色版)
+        run: pnpm tauri build --no-bundle
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          NAME="tracer-app-v${VERSION}-windows-x86_64-portable"
+          mkdir -p "dist/$NAME"
+          # --no-bundle 只产出裸可执行文件，位于工作区根的 target/release 目录，
+          # 这里同时兼容根目录与 src-tauri 子目录两种情况。
+          find ../target/release src-tauri/target/release \
+            -maxdepth 1 -type f -name "tracer-app.exe" \
+            -exec cp {} "dist/$NAME/" \; 2>/dev/null || true
+          ls -R "dist/$NAME"
+          echo "DIST_DIR=tracer-app/dist/$NAME" >> "$GITHUB_ENV"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracer-app-windows-x86_64-portable
+          path: ${{ env.DIST_DIR }}
+          if-no-files-found: error
+
+  # ------------------------------------------------------------------
+  # 汇总发布：当推送 v* tag 时创建 Release 并附上两个平台产物
+  # ------------------------------------------------------------------
+  release:
+    name: Release
+    needs: [tracer-mcp-linux, tracer-app-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**
+          generate_release_notes: true
