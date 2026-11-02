@@ -1,9 +1,12 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use clap::Parser;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use mcp::TracerMcp;
-use rmcp::{ServiceExt, transport::stdio};
+use rmcp::transport::streamable_http_server::{
+    StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
+};
 mod mcp;
 
 /// 启动参数：`-data` / `-secret` 可指定路径，不传则回退到默认值；`-h` 查看帮助
@@ -17,6 +20,10 @@ struct Cli {
     /// Secret key file path; falls back to env TRACET_SERVER_SECRET_KEY or cwd/tracer_server_secret_key.key
     #[arg(short = 's', long = "secret")]
     secret: Option<PathBuf>,
+
+    /// HTTP port to listen on
+    #[arg(short = 'p', long = "port", default_value_t = 8000)]
+    port: u16,
 }
 
 #[tokio::main]
@@ -30,12 +37,18 @@ async fn main() -> anyhow::Result<()> {
     let data_path = cli
         .data
         .unwrap_or_else(|| common::get_data_path(common::Role::Server));
-    info!(secret = %secret_path.display(), data = %data_path.display(), "tracer mcp start!");
-    let running = TracerMcp::new(secret_path, data_path)
-        .await?
-        .serve(stdio())
-        .await?; // serve(self) → RunningService
-    running.waiting().await?; // 在句柄上等待，直到客户端断开
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], cli.port));
+    info!(secret = %secret_path.display(), data = %data_path.display(), %addr, "tracer mcp start!");
+    let tracer = TracerMcp::new(secret_path, data_path).await?;
+    // Streamable HTTP 传输：每个客户端会话通过工厂函数克隆出一个 TracerMcp 实例
+    let service = StreamableHttpService::new(
+        move || Ok(tracer.clone()),
+        Arc::new(LocalSessionManager::default()),
+        StreamableHttpServerConfig::default(),
+    );
+    let router = axum::Router::new().nest_service("/mcp", service);
+    let tcp_listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(tcp_listener, router).await?;
     info!("tracer mcp stop!");
     Ok(())
 }

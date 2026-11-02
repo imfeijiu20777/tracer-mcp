@@ -14,7 +14,8 @@ anyhow.workspace=true
 futures-util.workspace=true
 futures-lite.workspace=true
 tracing.workspace=true
-rmcp = { version = "3.7.0", features = ["server", "macros", "transport-io"] }
+rmcp = { version = "3.7.0", features = ["server", "macros", "transport-streamable-http-server", "transport-streamable-http-server-session"] }
+axum = "0.8"
 schemars.workspace = true
 serde.workspace = true
 tracing-subscriber.workspace=true
