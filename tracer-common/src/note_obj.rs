@@ -2,18 +2,30 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 pub struct Envelope {
-    owner: String,
-    req: Req,
+   pub owner: String,
+   pub req: Req,
 }
-
+#[derive(Serialize, Deserialize)]
+pub enum SendNoteBodyEnum {
+    // 初始化全量笔记列表
+    InitList(Vec<ZNote>),
+    // Diff 结果：要求客户端推送这些 id 的完整笔记（同 id 但 hash 不一致）
+    NeedPush(Vec<String>),
+    // Push / Del 操作完成
+    Done,
+}
 #[derive(Serialize, Deserialize)]
 pub enum Req {
+    // 初始化：请求全量笔记
     Init,
-    Diff(Vec<(String, u64)>),
-    Push(Vec<String>),
+    // 差异比对：客户端发来 (id, hash) 列表
+    Diff(Vec<(String, String)>),
+    // 推送：客户端发来需要同步的完整笔记（id 一致更新，不一致创建）
+    Push(Vec<ZNote>),
+    // 删除：客户端要求删除的 id 列表
     Del(Vec<String>),
 }
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq,Serialize, Deserialize)]
 pub struct ZNote {
     pub id: i64,
     pub owner: String,

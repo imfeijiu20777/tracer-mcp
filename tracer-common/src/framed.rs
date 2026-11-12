@@ -1,5 +1,6 @@
 // 引入 iroh 单向流类型：RecvStream(接收流) 与 SendStream(发送流)
 use iroh::endpoint::{RecvStream, SendStream};
+use serde::{Serialize, de::DeserializeOwned};
 // 引入 tokio-util 的编解码工具：FramedRead/FramedWrite 负责把字节流“帧化”，
 // LengthDelimitedCodec 是一种“长度前缀”编解码器
 use tokio_util::{bytes::BytesMut, codec::{FramedRead, FramedWrite, LengthDelimitedCodec}};
@@ -9,7 +10,8 @@ use futures_util::{sink::SinkExt, stream::TryStreamExt};
 use anyhow::{Result};
 
 // 单条消息(帧)的最大字节长度限制，防止对端发送超大帧导致内存被耗尽
-const MAX_MESSAGE_SIZE: usize = 1000;
+// 4MiB：需要容纳 Push 同步时的整批笔记数据
+const MAX_MESSAGE_SIZE: usize = 4 * 1024 * 1024;
 
 /// This is just a convenience wrapper around a [`FramedRead`] and [`FramedWrite`]
 /// with a [`LengthDelimitedCodec`].
@@ -50,12 +52,12 @@ const MAX_MESSAGE_SIZE: usize = 1000;
 /// Because these will keep the frames in memory until they're complete, and you
 /// probably don't want to an arbitrary amount of memory depending on the bytes
 /// that were sent on the wire, you can configure a maximum frame length.
-/// We've set it to 1000 bytes in this case ([`MAX_MESSAGE_SIZE`]), but that's
+/// We've set it to 4MiB in this case ([`MAX_MESSAGE_SIZE`]), but that's
 /// (like many other things) configurable in [`LengthDelimitedCodec`].
 ///
 /// 中文说明：由于帧在收完整之前会一直驻留在内存中，如果不设上限，
 /// 恶意或对端的异常数据可能占用任意多的内存。因此这里通过
-/// [`MAX_MESSAGE_SIZE`] 把最大帧长度限制为 1000 字节（该值可自由配置）。
+/// [`MAX_MESSAGE_SIZE`] 把最大帧长度限制为 4MiB（该值可自由配置）。
 ///
 /// [`AsyncRead`]: tokio::io::AsyncRead
 /// [`AsyncWrite`]: tokio::io::AsyncWrite
@@ -96,6 +98,19 @@ pub async fn send_str(write: &mut WriteHalf, msg: &str) -> Result<()> {
 
 pub async fn recv_str(read: &mut ReadHalf) -> Result<String> {
     // FramedRead 实现了 Stream，try_next 返回 Option<Result<BytesMut, io::Error>>
+    let Some(frame) = read.try_next().await? else {
+        anyhow::bail!("stream closed");
+    };
+    Ok(postcard::from_bytes(&frame)?)
+}
+
+pub async fn send_msg<T: Serialize>(write: &mut WriteHalf, msg: &T) -> Result<()> {
+    let encoded = postcard::to_extend(msg, BytesMut::new())?.freeze();
+    write.send(encoded).await?;
+    Ok(())
+}
+
+pub async fn recv_msg<T: DeserializeOwned>(read: &mut ReadHalf) -> Result<T> {
     let Some(frame) = read.try_next().await? else {
         anyhow::bail!("stream closed");
     };
