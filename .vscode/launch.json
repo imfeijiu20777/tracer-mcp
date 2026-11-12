@@ -1,0 +1,92 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        
+        {
+            "name": "Debug unit tests in library 'tracer_common'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--package=tracer-common"
+                ]
+            }
+        },
+        {
+            "name": "Debug unit tests in library 'tracer_mcp'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--package=tracer-mcp"
+                ]
+            }
+        },
+        {
+            "name": "Debug executable 'tracer-mcp'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=tracer-mcp",
+                    "--package=tracer-mcp"
+                ]
+            },
+            "args": []
+        },
+        {
+            "name": "Debug unit tests in executable 'tracer-mcp'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--bin=tracer-mcp",
+                    "--package=tracer-mcp"
+                ]
+            }
+        },
+        {
+            "name": "Debug unit tests in library 'tracer_app_lib'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--package=tracer-app"
+                ]
+            }
+        },
+        {
+            "name": "Debug executable 'tracer-app'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "run",
+                    "--bin=tracer-app",
+                    "--package=tracer-app"
+                ]
+            },
+            "args": []
+        },
+        {
+            "name": "Debug unit tests in executable 'tracer-app'",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--bin=tracer-app",
+                    "--package=tracer-app"
+                ]
+            }
+        }
+    ]
+}

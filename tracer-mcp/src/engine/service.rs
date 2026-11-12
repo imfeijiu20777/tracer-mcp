@@ -1,9 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::{collections::HashMap, sync::Arc};
-
+use crate::zdb::simpledb::{init_db};
 use crate::engine::transport::{ZTransportEvent, ZTransports};
 use anyhow::{Result, anyhow};
 use common::{MESSAGE_ALPN, payload::Payload};
+use futures_util::lock::Mutex;
 use iroh::SecretKey;
 use iroh::{Endpoint, endpoint::presets, protocol::Router};
 use iroh_blobs::{BlobFormat, BlobsProtocol,Hash};
@@ -29,6 +30,8 @@ impl ZTransportHub {
     pub async fn new(secert_key:PathBuf,fs_db:PathBuf) -> Result<Self> {
         tracing::info!("secert_key path: {}", secert_key.display());
         tracing::info!("fs_db path: {}", fs_db.display());
+        let conn=init_db(fs_db.join("tracer.db"))?;
+        let conn_ref=Arc::new(Mutex::new(conn));
         let secert=load_or_create_key(secert_key)?;
         let endpoint = Endpoint::builder(presets::N0).secret_key(secert).bind().await?;
         endpoint.online().await;

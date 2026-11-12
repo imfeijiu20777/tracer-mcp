@@ -1,11 +1,11 @@
 use std::{env, path::PathBuf};
 use anyhow::Result;
-
+pub mod note_obj;
 pub mod framed;
 pub mod payload;
 
 pub const MESSAGE_ALPN: &[u8] = b"zline/message/1";
-
+pub const NOTE_ALPN:&[u8]=b"zline/note/1";
 /// 运行角色：区分 server 和 client
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
