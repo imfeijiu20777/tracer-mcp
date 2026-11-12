@@ -33,17 +33,3 @@ impl ProtocolHandler for NodeManage {
         Ok(())
      }
 }
-#[derive(Serialize, Deserialize, Clone, Copy)]
-#[repr(u8)]
-enum MsgType {
-    INIT = 0,
-    Text = 1,
-    Note = 2,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Frame {
-    msg_type: MsgType,   // type：1 字节
-    name:String,
-    body: Vec<u8>,       // body：内层 postcard 编码的字节
-}
