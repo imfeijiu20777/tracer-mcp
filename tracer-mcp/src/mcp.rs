@@ -28,6 +28,22 @@ struct SendFileParams {
     file_path: String,
 }
 
+/// send_note 工具的入参
+#[derive(serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+struct SendNoteParams {
+    /// 目标用户名（必须在线）
+    #[schemars(description = "Target user name (must be online)")]
+    name: String,
+
+    /// 可选的笔记标题
+    #[schemars(description = "Optional note title")]
+    title: Option<String>,
+
+    /// 笔记内容
+    #[schemars(description = "Note content")]
+    content: String,
+}
+
 #[derive(Clone)]
 pub struct TracerMcp {
     tool_router: ToolRouter<Self>,
@@ -87,6 +103,25 @@ impl TracerMcp {
             )
             .await
             .map_err(|e| ErrorData::internal_error(e.to_string(), None))
+    }
+
+    #[tool(description = "Create a note and send it to a specific online user")]
+    async fn send_note(
+        &self,
+        Parameters(params): Parameters<SendNoteParams>,
+    ) -> std::result::Result<String, ErrorData> {
+        if !self.service.has_user(&params.name).await {
+            return Err(ErrorData::invalid_params(
+                format!("user not online: {}", params.name),
+                None,
+            ));
+        }
+        let id = self
+            .service
+            .create_note_for(&params.name, params.title.as_deref(), &params.content)
+            .await
+            .map_err(|e| ErrorData::internal_error(e.to_string(), None))?;
+        Ok(id.to_string())
     }
 }
 

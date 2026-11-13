@@ -3,6 +3,7 @@ use anyhow::Result;
 pub mod note_obj;
 pub mod framed;
 pub mod payload;
+pub mod simpledb;
 
 pub const MESSAGE_ALPN: &[u8] = b"zline/message/1";
 pub const NOTE_ALPN:&[u8]=b"zline/note/1";

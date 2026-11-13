@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 use std::{collections::HashMap, sync::Arc};
-use crate::zdb::simpledb::{init_db};
+use common::simpledb::{add_note, init_db};
 use crate::engine::transport::{ZTransportEvent, ZTransports};
 use anyhow::{Result, anyhow};
-use common::{MESSAGE_ALPN, payload::Payload};
-use futures_util::lock::Mutex;
+use common::{MESSAGE_ALPN, NOTE_ALPN, payload::Payload};
+use crate::engine::note::NodeManage;
 use iroh::SecretKey;
 use iroh::{Endpoint, endpoint::presets, protocol::Router};
 use iroh_blobs::{BlobFormat, BlobsProtocol,Hash};
@@ -13,7 +13,7 @@ use iroh_blobs::api::blobs::{AddPathOptions, ImportMode};
 use iroh_blobs::ticket::BlobTicket;
 use iroh_tickets::Ticket;
 use iroh_tickets::endpoint::{EndpointTicket};
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock, broadcast};
 use tracing::{info, warn};
 /// 这个地方的目的是为了对消息进行一定的转换，并提供核心的管理状态等逻辑
 pub struct ZTransportHub {
@@ -23,6 +23,8 @@ pub struct ZTransportHub {
     transport: ZTransports,
     // id:name
     addrs: Arc<RwLock<HashMap<String, u64>>>,
+    // 笔记库：与 NodeManage 共享同一连接句柄
+    db: Arc<Mutex<rusqlite::Connection>>,
 }
 
 impl ZTransportHub {
@@ -30,8 +32,9 @@ impl ZTransportHub {
     pub async fn new(secert_key:PathBuf,fs_db:PathBuf) -> Result<Self> {
         tracing::info!("secert_key path: {}", secert_key.display());
         tracing::info!("fs_db path: {}", fs_db.display());
-        let conn=init_db(fs_db.join("tracer.db"))?;
-        let conn_ref=Arc::new(Mutex::new(conn));
+        // 共享 DB 句柄：NodeManage（同步）与 Hub（MCP 建笔记）用同一连接
+        let conn = Arc::new(Mutex::new(init_db(fs_db.join("tracer.db"))?));
+        let note_handler=NodeManage::new(conn.clone())?;
         let secert=load_or_create_key(secert_key)?;
         let endpoint = Endpoint::builder(presets::N0).secret_key(secert).bind().await?;
         endpoint.online().await;
@@ -40,6 +43,7 @@ impl ZTransportHub {
         let transport = ZTransports::new();
         let _router = Router::builder(endpoint.clone())
             .accept(MESSAGE_ALPN, transport.clone())
+            .accept(NOTE_ALPN, note_handler)
             .accept(iroh_blobs::ALPN, BlobsProtocol::new(&store, None))
             .spawn();
         let body = Self {
@@ -47,6 +51,7 @@ impl ZTransportHub {
             endpoint: endpoint.clone(),_router,
             transport: transport.clone(),
             addrs: Arc::new(RwLock::new(HashMap::new())),
+            db: conn,
         };
         body.listen(transport.subscribe())?;
         Ok(body)
@@ -62,6 +67,23 @@ impl ZTransportHub {
     }
     pub async  fn get_all_user(&self)->Vec<String>{
         self.addrs.read().await.keys().cloned().collect()
+    }
+    /// 为指定在线用户生成笔记：先写服务端库（owner=收件人），再经 MESSAGE_ALPN 推 NoteNotice。
+    /// 推送失败不回滚落库（笔记仍可经下次同步取回），错误如实上报
+    pub async fn create_note_for(&self, name: &str, title: Option<&str>, content: &str) -> Result<i64> {
+        if !self.has_user(name).await {
+            return Err(anyhow!("user not online: {name}"));
+        }
+        let id = {
+            let db = self.db.lock().await;
+            add_note(&db, name, title, content)?
+        };
+        self.send_to(
+            name,
+            Payload::NoteNotice { id, title: title.unwrap_or("").to_string() },
+        )
+        .await?;
+        Ok(id)
     }
     /// 分享
     pub async fn share(&self, path: &Path) -> Result<(BlobTicket,String)> {

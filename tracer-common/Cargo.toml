@@ -11,3 +11,4 @@ tokio-util.workspace = true
 futures-util.workspace = true
 anyhow.workspace=true
 serde.workspace = true
+rusqlite.workspace = true

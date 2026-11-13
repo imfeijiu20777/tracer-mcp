@@ -1,10 +1,10 @@
 use tokio::sync::{Mutex, RwLock};
 use anyhow::Result;
 use iroh_blobs::ticket::BlobTicket;
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 use tracing_subscriber::EnvFilter;
 use crate::service::RecordService;
-use common::{Role, get_data_path, payload::Payload};
+use common::{Role, get_data_path, note_obj::ZNote, payload::Payload, simpledb};
 use tauri::{Emitter, Manager};
 use tracing::{debug,info,warn};
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -15,22 +15,34 @@ fn greet(name: &str) -> String {
 }
 struct AppState {
     service: Mutex<Option<RecordService>>,
-    name:RwLock<Option<String>>
-    
+    name: RwLock<Option<String>>,
+    // 本地笔记库（与服务端同构），离线可用
+    db: Arc<Mutex<rusqlite::Connection>>,
 }
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     init_tracing();
+    let db = simpledb::init_db(get_data_path(Role::Client).join("tracer.db"))
+        .expect("failed to init client note db");
     tauri::Builder::default()
-        .manage(AppState{service:Mutex::new(None),name:RwLock::new(None)})
+        .manage(AppState {
+            service: Mutex::new(None),
+            name: RwLock::new(None),
+            db: Arc::new(Mutex::new(db)),
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             greet,
-             init_ticket,
-              query_records,
-              set_name,
-              download])
+            init_ticket,
+            query_records,
+            set_name,
+            download,
+            list_notes,
+            add_note,
+            update_note,
+            delete_note,
+            sync_notes])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -84,12 +96,17 @@ async fn query_records(
 /// 调用设置名称
 #[tauri::command]
 async fn set_name(name: String, state: tauri::State<'_, AppState>) -> Result<(), String> {
-    // 记录到本地状态
+    // 先记录到本地状态（未连接时笔记 CRUD 也能用）
     let _ = state.name.write().await.insert(name.clone());
-    // 通过写端把名称以 Payload::Name 发送给服务端
+    // 已连接才把名称以 Payload::Name 发送给服务端
     let mut guard = state.service.lock().await;
-    let service = guard.as_mut().ok_or("service not initialized, call init_ticket first")?;
-    service.send_message(Payload::Name(name)).await.map_err(|e| e.to_string())
+    if let Some(service) = guard.as_mut() {
+        service
+            .send_message(Payload::Name(name))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 /// 进行下载
 ///
@@ -115,4 +132,84 @@ async fn download(
         // 完整错误链透传给调用方，避免 iroh-blobs 吞掉底层 os error 详情
         .map_err(|e| format!("{e:#}"))?;
     Ok(())
+}
+
+/// 笔记 owner：取本地 name，未设置报错
+async fn owner_of(state: &tauri::State<'_, AppState>) -> Result<String, String> {
+    state
+        .name
+        .read()
+        .await
+        .clone()
+        .ok_or_else(|| "name not set, call set_name first".to_string())
+}
+
+/// 查询本地笔记（不含墓碑）
+#[tauri::command]
+async fn list_notes(state: tauri::State<'_, AppState>) -> Result<Vec<ZNote>, String> {
+    let owner = owner_of(&state).await?;
+    let db = state.db.lock().await;
+    simpledb::list_notes_by_name(&db, &owner).map_err(|e| e.to_string())
+}
+
+/// 新增本地笔记
+#[tauri::command]
+async fn add_note(
+    title: Option<String>,
+    content: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<i64, String> {
+    let owner = owner_of(&state).await?;
+    let db = state.db.lock().await;
+    simpledb::add_note(&db, &owner, title.as_deref(), &content).map_err(|e| e.to_string())
+}
+
+/// 更新本地笔记（同时复活墓碑）
+#[tauri::command]
+async fn update_note(
+    id: i64,
+    title: Option<String>,
+    content: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    simpledb::update_note(&db, id, title.as_deref(), &content).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 删除本地笔记（墓碑，随同步传播到服务端）
+#[tauri::command]
+async fn delete_note(id: i64, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let owner = owner_of(&state).await?;
+    let db = state.db.lock().await;
+    simpledb::delete_note(&db, &owner, id).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// 两阶段增量同步：元数据先行、差异全量行双向分块补齐，
+/// 应用服务器侧差异到本地，并返回最新列表供前端刷新
+#[tauri::command]
+async fn sync_notes(state: tauri::State<'_, AppState>) -> Result<Vec<ZNote>, String> {
+    let owner = owner_of(&state).await?;
+    let notes = {
+        let db = state.db.lock().await;
+        simpledb::list_all_notes(&db, &owner).map_err(|e| e.to_string())?
+    };
+    let outcome = {
+        let guard = state.service.lock().await;
+        let service = guard
+            .as_ref()
+            .ok_or("service not initialized, call init_ticket first")?;
+        service
+            .sync_notes(&owner, notes)
+            .await
+            .map_err(|e| format!("{e:#}"))?
+    };
+    {
+        let db = state.db.lock().await;
+        simpledb::apply_sync_result(&db, &owner, &outcome.give, &outcome.tombstones)
+            .map_err(|e| e.to_string())?;
+    }
+    let db = state.db.lock().await;
+    simpledb::list_notes_by_name(&db, &owner).map_err(|e| e.to_string())
 }

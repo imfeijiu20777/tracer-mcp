@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -12,7 +12,9 @@ import type {
   DownloadProgressPayload,
   DownloadTask,
   FileNotice,
+  NoteNoticePayload,
   RawPayload,
+  ZNote,
 } from "./types";
 import { formatSize } from "./utils/format";
 import AppHeader from "./components/AppHeader.vue";
@@ -21,6 +23,8 @@ import NoticeList from "./components/NoticeList.vue";
 import TicketDialog from "./components/TicketDialog.vue";
 import NameDialog from "./components/NameDialog.vue";
 import DetailDialog from "./components/DetailDialog.vue";
+import NotesPanel from "./components/NotesPanel.vue";
+import NoteDialog from "./components/NoteDialog.vue";
 
 const $q = useQuasar();
 
@@ -44,6 +48,15 @@ const fileNotices = ref<FileNotice[]>([]);
 const selected = ref<FileNotice | null>(null);
 const preparingDownload = ref(false);
 const downloadTasks = ref<DownloadTask[]>([]);
+
+// ---- 笔记页状态 ----
+const activeTab = ref<"notices" | "notes">("notices");
+const notes = ref<ZNote[]>([]);
+const syncing = ref(false);
+const noteDialog = ref(false);
+const editingNote = ref<ZNote | null>(null);
+const noteTitle = ref("");
+const noteContent = ref("");
 
 // 正在下载中的 ticker 列表，用于通知列表行内「下载中」徽标
 const downloadingTickers = computed(() =>
@@ -70,6 +83,82 @@ async function loadRecords() {
   } catch (e) {
     console.error("query_records failed", e);
   }
+}
+
+// ---- 笔记动作 ----
+async function loadNotes() {
+  try {
+    notes.value = await invoke<ZNote[]>("list_notes");
+  } catch (e) {
+    console.error("list_notes failed", e);
+  }
+}
+
+// 切到 Notes tab 时刷新本地笔记
+watch(activeTab, (tab) => {
+  if (tab === "notes") void loadNotes();
+});
+
+// 两阶段增量同步：返回值即最新列表；syncing 守卫避免重复触发
+async function doSync() {
+  if (syncing.value) return;
+  syncing.value = true;
+  try {
+    notes.value = await invoke<ZNote[]>("sync_notes");
+  } catch (e) {
+    $q.notify({ type: "negative", position: "top", message: String(e) });
+  } finally {
+    syncing.value = false;
+  }
+}
+
+function openNewNote() {
+  editingNote.value = null;
+  noteTitle.value = "";
+  noteContent.value = "";
+  noteDialog.value = true;
+}
+
+function openEditNote(note: ZNote) {
+  editingNote.value = note;
+  noteTitle.value = note.title ?? "";
+  noteContent.value = note.content;
+  noteDialog.value = true;
+}
+
+// 保存：有 editingNote 走更新，否则新增；空标题传 null
+async function submitNote() {
+  const title = noteTitle.value.trim() || null;
+  const content = noteContent.value;
+  if (!content.trim()) return;
+  try {
+    if (editingNote.value) {
+      await invoke("update_note", { id: editingNote.value.id, title, content });
+    } else {
+      await invoke("add_note", { title, content });
+    }
+    noteDialog.value = false;
+    await loadNotes();
+  } catch (e) {
+    $q.notify({ type: "negative", position: "top", message: String(e) });
+  }
+}
+
+// 删除：弹框确认后墓碑删除，随下次同步传播到服务端
+function deleteNote(note: ZNote) {
+  $q.dialog({
+    title: "Delete note",
+    message: `Delete "${note.title || "Untitled"}"? The deletion will be synced to the server.`,
+    cancel: true,
+    persistent: true,
+  }).onOk(async () => {
+    try {
+      await invoke("delete_note", { id: note.id });
+      await loadNotes();
+    } catch (e) {
+      $q.notify({ type: "negative", position: "top", message: String(e) });
+    }
+  });
 }
 
 onMounted(async () => {
@@ -99,6 +188,17 @@ onMounted(async () => {
     // 后端在收到新消息时发出 MessageUpdate，此时拉取最新记录
     if ("MessageUpdate" in payload) {
       void loadRecords();
+      return;
+    }
+    // 笔记投递通知：提示并自动两阶段同步取回新笔记
+    if ("NoteNotice" in payload) {
+      const data = payload.NoteNotice as NoteNoticePayload;
+      $q.notify({
+        type: "info",
+        position: "top",
+        message: `New note: ${data.title || "Untitled"}`,
+      });
+      void doSync();
       return;
     }
     if ("DownloadProgress" in payload) {
@@ -144,6 +244,7 @@ async function submitName() {
     registeredName.value = nameInput.value.trim();
     nameDialog.value = false;
     await loadRecords();
+    await loadNotes();
   } catch (e) {
     $q.notify({ type: "negative", position: "top", message: String(e) });
   }
@@ -288,13 +389,40 @@ async function downloadFile(item: FileNotice) {
 
     <q-page-container>
       <q-page class="wf-page column">
-        <!-- 下载进度：wireframe 描边风格面板 -->
-        <DownloadTaskList :tasks="downloadTasks" />
-        <!-- 文件通知列表：从新到旧 -->
-        <NoticeList
-          :notices="fileNotices"
-          :downloading-tickers="downloadingTickers"
-          @open="openDetail"
+        <!-- 顶部 Tab：文件通知 / 笔记 两个视图切换 -->
+        <q-tabs
+          v-model="activeTab"
+          dense
+          align="left"
+          class="text-black q-mb-sm"
+          active-color="black"
+          indicator-color="black"
+        >
+          <q-tab name="notices" label="Notices" />
+          <q-tab name="notes" label="Notes" />
+        </q-tabs>
+
+        <template v-if="activeTab === 'notices'">
+          <!-- 下载进度：wireframe 描边风格面板 -->
+          <DownloadTaskList :tasks="downloadTasks" />
+          <!-- 文件通知列表：从新到旧 -->
+          <NoticeList
+            :notices="fileNotices"
+            :downloading-tickers="downloadingTickers"
+            @open="openDetail"
+          />
+        </template>
+
+        <!-- 笔记视图：列表渲染 + 增删改 + 手动同步 -->
+        <NotesPanel
+          v-else
+          :notes="notes"
+          :syncing="syncing"
+          :connected="connected"
+          @add="openNewNote"
+          @edit="openEditNote"
+          @delete="deleteNote"
+          @sync="doSync"
         />
       </q-page>
     </q-page-container>
@@ -317,6 +445,15 @@ async function downloadFile(item: FileNotice) {
       :downloading="isSelectedDownloading"
       :loading="preparingDownload"
       @download="selected && downloadFile(selected)"
+    />
+
+    <!-- ④ 笔记新增 / 编辑弹框 -->
+    <NoteDialog
+      v-model="noteDialog"
+      v-model:title="noteTitle"
+      v-model:content="noteContent"
+      :editing="!!editingNote"
+      @submit="submitNote"
     />
   </q-layout>
 </template>

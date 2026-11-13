@@ -22,3 +22,4 @@ serde = { version = "1", features = ["derive"] }
 schemars = "1.2.3"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.42.0", features = ["bundled"] }

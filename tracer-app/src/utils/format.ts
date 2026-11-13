@@ -14,3 +14,9 @@ export function formatSize(bytes: number): string {
 export function toMB(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
 }
+
+/** 秒级时间戳 -> 本地日期时间串；null 返回空串 */
+export function formatTime(ts: number | null): string {
+  if (ts === null) return "";
+  return new Date(ts * 1000).toLocaleString();
+}

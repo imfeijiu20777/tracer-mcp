@@ -3,30 +3,24 @@ use std::sync::Arc;
 
 use common::{
     framed::{FramedBiStream, recv_msg, send_msg},
-    note_obj::{
-        Envelope,
-        Req::{self},
-        SendNoteBodyEnum,
-    },
+    note_obj::{Envelope, NoteMeta, Req, SendNoteBodyEnum, ZNote, chunk_by, note_size},
+    simpledb::{sync_phase1, upsert_notes},
 };
-use futures_util::lock::Mutex;
+use tokio::sync::Mutex;
 use iroh::{
     endpoint::Connection,
     protocol::{AcceptError, ProtocolHandler},
 };
 use rusqlite;
 
-use crate::zdb::simpledb::{compare_hashes, delete_notes, list_notes_by_name, upsert_notes};
 #[derive(Debug, Clone)]
 pub struct NodeManage {
     // 关联连接
     conn: Arc<Mutex<rusqlite::Connection>>,
 }
 impl NodeManage {
-    pub fn new(conn: rusqlite::Connection) -> Result<Self> {
-        return Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
-        });
+    pub fn new(conn: Arc<Mutex<rusqlite::Connection>>) -> Result<Self> {
+        return Ok(Self { conn });
     }
 }
 
@@ -41,6 +35,8 @@ impl ProtocolHandler for NodeManage {
         let mut framed = FramedBiStream::new(bi);
         let conn: Arc<Mutex<rusqlite::Connection>> = self.conn.clone();
         tokio::spawn(async move {
+            // 每连接一个两阶段同步会话：累积元数据/差异分块
+            let mut session = SyncSession::default();
             loop {
                 // 读一条消息
                 let msg: Envelope = match recv_msg(&mut framed.read).await {
@@ -71,14 +67,16 @@ impl ProtocolHandler for NodeManage {
                 // 先在锁内同步构造响应并释放锁，再异步发送。
                 // rusqlite::Connection 是 Send 但不是 Sync，db 引用不能跨 await 持有，
                 // 否则 tokio::spawn 要求整个 future 为 Send 会编译失败
-                let resp = {
+                let resps = {
                     let db = conn.lock().await;
-                    build_response(&db, &msg)
+                    handle_request(&db, &mut session, &msg)
                 };
-                match resp {
-                    Ok(resp) => {
-                        if let Err(e) = send_msg(&mut framed.write, &resp).await {
-                            tracing::warn!("发送响应失败: {e}");
+                match resps {
+                    Ok(resps) => {
+                        for resp in resps {
+                            if let Err(e) = send_msg(&mut framed.write, &resp).await {
+                                tracing::warn!("发送响应失败: {e}");
+                            }
                         }
                     }
                     Err(e) => tracing::warn!("处理请求失败: {e}"),
@@ -88,24 +86,49 @@ impl ProtocolHandler for NodeManage {
         Ok(())
     }
 }
-/// 根据请求构造响应（纯同步，不做 IO）
-fn build_response(db: &rusqlite::Connection, body: &Envelope) -> Result<SendNoteBodyEnum> {
+
+/// 每连接的两阶段同步会话状态
+#[derive(Default)]
+struct SyncSession {
+    metas: Vec<NoteMeta>,
+    push: Vec<ZNote>,
+}
+
+/// 根据请求构造响应（纯同步，不做 IO）；一个请求可能对应多帧响应（Give 连发 + Need）
+fn handle_request(
+    db: &rusqlite::Connection,
+    session: &mut SyncSession,
+    body: &Envelope,
+) -> Result<Vec<SendNoteBodyEnum>> {
     match &body.req {
-        // 初始化：将服务端该用户名下的全部笔记发送给客户端
-        Req::Init => Ok(SendNoteBodyEnum::InitList(list_notes_by_name(db, &body.owner)?)),
-        // 差异比对：客户端发来 (uuid, hash) 列表，服务器比对同 uuid 但 hash 不同的笔记，
-        // 把这些不一致笔记的 id 通过 NeedPush 回复客户端，要求客户端把完整笔记推送回来
-        Req::Diff(list) => Ok(SendNoteBodyEnum::NeedPush(compare_hashes(db, &body.owner, list)?)),
-        // 推送：客户端按 Diff 结果把需要同步的笔记发过来，
-        // id 与服务器一致的执行更新，不一致的创建新记录（upsert）
-        Req::Push(notes) => {
-            upsert_notes(db, &body.owner, notes)?;
-            Ok(SendNoteBodyEnum::Done)
+        // 阶段一：累积元数据块；最后一块合并出计划，
+        // 服务器赢家差异全量行分块连发（期间客户端只读不发），最后 Need
+        Req::Meta { metas, last } => {
+            session.metas.extend(metas.iter().cloned());
+            if !last {
+                return Ok(vec![SendNoteBodyEnum::Ack]);
+            }
+            let plan = sync_phase1(db, &body.owner, &session.metas)?;
+            session.metas.clear();
+            let mut out: Vec<SendNoteBodyEnum> = chunk_by(plan.give, note_size)
+                .into_iter()
+                .map(SendNoteBodyEnum::Give)
+                .collect();
+            out.push(SendNoteBodyEnum::Need {
+                need_push: plan.need_push,
+                tombstones: plan.tombstones,
+            });
+            Ok(out)
         }
-        // 删除：按客户端要求删除指定 id 的笔记
-        Req::Del(ids) => {
-            delete_notes(db, &body.owner, ids)?;
-            Ok(SendNoteBodyEnum::Done)
+        // 阶段二：累积差异块；最后一块批量写库回 Done
+        Req::Push { notes, last } => {
+            session.push.extend(notes.iter().cloned());
+            if !last {
+                return Ok(vec![SendNoteBodyEnum::Ack]);
+            }
+            upsert_notes(db, &body.owner, &session.push)?;
+            session.push.clear();
+            Ok(vec![SendNoteBodyEnum::Done])
         }
     }
 }

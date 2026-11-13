@@ -25,8 +25,11 @@ use tracing::{debug, info, warn};
 const DOWNLOAD_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 use common::{
-    MESSAGE_ALPN,
-    framed::{FramedBiStream, WriteHalf, recv_str, send_str},
+    MESSAGE_ALPN, NOTE_ALPN,
+    framed::{FramedBiStream, ReadHalf, WriteHalf, recv_msg, recv_str, send_msg, send_str},
+    note_obj::{
+        Envelope, NoteMeta, Req, SendNoteBodyEnum, ZNote, chunk_by, meta_size, note_size,
+    },
     payload::Payload,
 };
 use iroh::{
@@ -52,6 +55,12 @@ pub struct RecordService {
     events: Sender<RecordEvent>,
     // 已受理过的下载任务 id，保证同一个 id 只会被使用一次
     seen_download_task_ids: Arc<RwLock<HashSet<String>>>,
+}
+
+/// 两阶段增量同步结果：服务器赢家差异全量行 + 合并后的墓碑赢家
+pub struct SyncOutcome {
+    pub give: Vec<ZNote>,
+    pub tombstones: Vec<NoteMeta>,
 }
 
 impl RecordService {
@@ -124,6 +133,12 @@ impl RecordService {
                                 let _=event_tx.send(RecordEvent::MessageUpdate()).await;
                                 let pbody=Payload::parse(&msg);
                                 info!("message {}",pbody);
+                                // 笔记投递通知：额外发 NoteNotice 事件，前端据此触发自动同步
+                                if let Payload::NoteNotice { id, title } = &pbody {
+                                    let _ = event_tx
+                                        .send(RecordEvent::NoteNotice { id: *id, title: title.clone() })
+                                        .await;
+                                }
                                 record_vec_clone.write().await.push(pbody);
                                 info!(
                                     msg_len = msg.len(),
@@ -244,6 +259,72 @@ impl RecordService {
         send_str(&mut self.write, &msg).await?;
         info!(msg_len = msg.len(), "message sent to server");
         Ok(())
+    }
+
+    /// 一次性 NOTE_ALPN 连接做两阶段增量同步：
+    /// 阶段一分块发全量元数据，收服务器差异下行与补内容清单；
+    /// 阶段二按 id 分块补差异全量行。中间帧一律 lockstep，避免流控死锁
+    pub async fn sync_notes(&self, owner: &str, local: Vec<ZNote>) -> Result<SyncOutcome> {
+        let connection = self
+            .endpoint
+            .connect(self.server_ticket.clone(), NOTE_ALPN)
+            .await?;
+        let bi = connection.open_bi().await?;
+        let mut framed = FramedBiStream::new(bi);
+
+        // 阶段一：全量元数据分块（空元数据也发一个结束帧触发服务器合并）
+        let metas: Vec<NoteMeta> = local.iter().map(NoteMeta::from).collect();
+        let mut chunks = chunk_by(metas, meta_size);
+        if chunks.is_empty() {
+            chunks.push(Vec::new());
+        }
+        let n = chunks.len();
+        for (i, chunk) in chunks.into_iter().enumerate() {
+            let last = i + 1 == n;
+            let env = Envelope {
+                owner: owner.to_string(),
+                req: Req::Meta { metas: chunk, last },
+            };
+            send_msg(&mut framed.write, &env).await?;
+            if !last {
+                expect_ack(&mut framed.read).await?;
+            }
+        }
+        // 读服务器差异下行，直到 Need
+        let mut give = Vec::new();
+        let (need_push, tombstones) = loop {
+            match recv_msg::<SendNoteBodyEnum>(&mut framed.read).await? {
+                SendNoteBodyEnum::Give(rows) => give.extend(rows),
+                SendNoteBodyEnum::Need {
+                    need_push,
+                    tombstones,
+                } => break (need_push, tombstones),
+                _ => anyhow::bail!("unexpected phase-1 sync response"),
+            }
+        };
+
+        // 阶段二：按 id 分块补内容（空差异也发一个结束帧）
+        let need: HashSet<i64> = need_push.into_iter().collect();
+        let to_push: Vec<ZNote> = local.into_iter().filter(|n| need.contains(&n.id)).collect();
+        let mut chunks = chunk_by(to_push, note_size);
+        if chunks.is_empty() {
+            chunks.push(Vec::new());
+        }
+        let n = chunks.len();
+        for (i, chunk) in chunks.into_iter().enumerate() {
+            let last = i + 1 == n;
+            let env = Envelope {
+                owner: owner.to_string(),
+                req: Req::Push { notes: chunk, last },
+            };
+            send_msg(&mut framed.write, &env).await?;
+            if last {
+                expect_done(&mut framed.read).await?;
+            } else {
+                expect_ack(&mut framed.read).await?;
+            }
+        }
+        Ok(SyncOutcome { give, tombstones })
     }
 
     /// 显式优雅关闭服务，释放 Endpoint 资源
@@ -413,6 +494,22 @@ impl Drop for RecordService {
     }
 }
 
+/// lockstep 中间帧确认：只接受 Ack
+async fn expect_ack(read: &mut ReadHalf) -> Result<()> {
+    match recv_msg::<SendNoteBodyEnum>(read).await? {
+        SendNoteBodyEnum::Ack => Ok(()),
+        _ => anyhow::bail!("expected Ack"),
+    }
+}
+
+/// lockstep 结束帧确认：只接受 Done
+async fn expect_done(read: &mut ReadHalf) -> Result<()> {
+    match recv_msg::<SendNoteBodyEnum>(read).await? {
+        SendNoteBodyEnum::Done => Ok(()),
+        _ => anyhow::bail!("expected Done"),
+    }
+}
+
 /// 当前数据传输路径的连接类型，序列化后给前端展示（英文）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -429,6 +526,8 @@ pub enum RecordEvent {
     MessageUpdate(),
     // 关闭连接
     DisConnection(),
+    // 笔记投递通知：前端据此提示并触发自动同步
+    NoteNotice { id: i64, title: String },
     // 连接类型变化：前端据此显示绿点并展示 Relay / P2P
     Connection { conn_type: ConnType },
     // 下载进度：前端按 task_id 找到对应进度条并渲染 downloaded
