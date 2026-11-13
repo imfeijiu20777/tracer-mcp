@@ -11,8 +11,6 @@ use iroh_blobs::{BlobFormat, BlobsProtocol,Hash};
 use iroh_blobs::api::Store;
 use iroh_blobs::api::blobs::{AddPathOptions, ImportMode};
 use iroh_blobs::ticket::BlobTicket;
-use iroh_tickets::Ticket;
-use iroh_tickets::endpoint::{EndpointTicket};
 use tokio::sync::{Mutex, RwLock, broadcast};
 use tracing::{info, warn};
 /// 这个地方的目的是为了对消息进行一定的转换，并提供核心的管理状态等逻辑
@@ -56,10 +54,10 @@ impl ZTransportHub {
         body.listen(transport.subscribe())?;
         Ok(body)
     }
-      /// 依据endpoint 返回单据
-    pub fn get_ticker(&self)->String{
-          let ticket = EndpointTicket::new(self.endpoint.clone().addr());
-          ticket.encode_string()
+    /// 返回节点公钥（EndpointId）：由持久化 secret key 派生，重启不变；
+    /// 客户端凭公钥经 N0 地址发现（pkarr 发布/解析）即可建连，无需 ticket
+    pub fn get_node_id(&self) -> String {
+        self.endpoint.id().to_string()
     }
     /// 判断是否有这个人
     pub async fn has_user(&self,name: &str)->bool{

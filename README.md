@@ -16,7 +16,7 @@ An AI assistant pushes file notices to desktop clients through MCP tools; client
 ```
 
 1. `tracer-mcp` runs as an MCP server over stdio, hosting an iroh endpoint and a blob store.
-2. `tracer-app` (a Tauri desktop client) connects to the server with an endpoint ticket and registers a user name.
+2. `tracer-app` (a Tauri desktop client) connects to the server with its node public key (address resolved via iroh's N0 address discovery) and registers a user name.
 3. The AI calls the `send_file` tool → the server imports the file into its blob store and pushes a `file_notice` to the target client.
 4. The client picks a save location via a native dialog and downloads the blob with real-time progress.
 
@@ -29,14 +29,14 @@ An AI assistant pushes file notices to desktop clients through MCP tools; client
 | Crate | Description |
 | --- | --- |
 | `tracer-common` | Shared protocol: framed bi-stream messaging, `Payload` message format, path/key resolution |
-| `tracer-mcp` | MCP server (stdio, rmcp): connection hub, blob provider, `send_file` / `get_ticker` / `user_all` tools |
-| `tracer-app` | Tauri 2 desktop client (Vue 3 + Quasar): ticket connection, notice list, P2P download with progress |
+| `tracer-mcp` | MCP server (stdio, rmcp): connection hub, blob provider, `send_file` / `get_node_id` / `user_all` tools |
+| `tracer-app` | Tauri 2 desktop client (Vue 3 + Quasar): server-key connection, notice list, P2P download with progress |
 
 ## MCP Tools
 
 | Tool | Description |
 | --- | --- |
-| `get_ticker` | Get the server connection ticket (endpoint ticket) |
+| `get_node_id` | Get the server node public key (stable node id) |
 | `user_all` | List all currently registered users |
 | `send_file` | Send a file to a specific user (`name`, `file_path`) |
 
@@ -86,15 +86,23 @@ pnpm tauri dev      # development
 pnpm tauri build    # production bundle
 ```
 
-On startup the app asks for a **ticket** (get it from the AI via `get_ticker`, or from the server operator), then a **user name**. Once connected, incoming file notices appear in the list — click one, confirm, choose a save location, and the download starts.
+On startup the app asks for the **server public key** (get it from the AI via `get_node_id`, or from the server operator), then a **user name**. If both `TRACER_SERVER_ID` and `TRACER_NAME` are set, it connects and registers automatically with no input; if only one is set, the dialogs are pre-filled and you complete the missing one. Once connected, incoming file notices appear in the list — click one, confirm, choose a save location, and the download starts.
+
+```powershell
+# Optional: zero-input startup (PowerShell example)
+$env:TRACER_SERVER_ID = "<64-char hex public key from get_node_id>"
+$env:TRACER_NAME = "alice"
+```
 
 ## Configuration
 
 | Environment variable | Role | Description |
 | --- | --- | --- |
 | `TRACET_SERVER_DATA_PATH` | server | Blob store directory |
-| `TRACET_SERVER_SECRET_KEY` | server | Secret key file (keep it stable, or the ticket's node id changes) |
+| `TRACET_SERVER_SECRET_KEY` | server | Secret key file (keep it stable, or the node public key changes) |
 | `TRACET_CLIENT_DATA_PATH` | client | Client blob cache directory |
+| `TRACER_SERVER_ID` | client | Server node public key (from `get_node_id`); auto-connects when set with `TRACER_NAME` |
+| `TRACER_NAME` | client | Client user name; auto-registers when set with `TRACER_SERVER_ID` |
 | `RUST_LOG` | both | Log level filter (default `info`) |
 
 ## Tech Stack

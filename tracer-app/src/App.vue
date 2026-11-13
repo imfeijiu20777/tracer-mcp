@@ -11,6 +11,7 @@ import type {
   DownloadFinishedPayload,
   DownloadProgressPayload,
   DownloadTask,
+  EnvConfig,
   FileNotice,
   NoteNoticePayload,
   RawPayload,
@@ -33,7 +34,7 @@ const ticketDialog = ref(false);
 const nameDialog = ref(false);
 const detailDialog = ref(false);
 
-const ticketInput = ref("");
+const serverKeyInput = ref("");
 const nameInput = ref("");
 const connecting = ref(false);
 // 已注册的姓名（set_name 成功后记录）与应用版本号，展示在头部
@@ -168,8 +169,7 @@ onMounted(async () => {
   } catch (e) {
     console.error("getVersion failed", e);
   }
-  // 进入即弹出 ticket 输入框
-  ticketDialog.value = true;
+  // 进入先挂事件监听，再按环境变量决定自动连接还是弹框输入
   unlisten = await listen("record-event", (event) => {
     const payload = event.payload as Record<string, unknown>;
     // 连接建立 / 路径切换：更新连接状态与中继·P2P 类型
@@ -216,6 +216,21 @@ onMounted(async () => {
       failDownloadTask(data.task_id, data.error);
     }
   });
+
+  // 读环境变量配置：两者都配置则自动连接，否则预填并弹框补输入
+  let cfg: EnvConfig = { server_id: null, name: null };
+  try {
+    cfg = await invoke<EnvConfig>("get_env_config");
+  } catch (e) {
+    console.error("get_env_config failed", e);
+  }
+  if (cfg.server_id) serverKeyInput.value = cfg.server_id;
+  if (cfg.name) nameInput.value = cfg.name;
+  if (cfg.server_id && cfg.name) {
+    await autoConnect(cfg.server_id, cfg.name);
+  } else {
+    ticketDialog.value = true;
+  }
 });
 
 onBeforeUnmount(() => {
@@ -224,14 +239,31 @@ onBeforeUnmount(() => {
 
 // ---- 流程动作 ----
 async function submitTicket() {
-  if (!ticketInput.value.trim()) return;
+  if (!serverKeyInput.value.trim()) return;
   connecting.value = true;
   try {
-    await invoke("init_ticket", { ticket: ticketInput.value.trim() });
+    await invoke("init_server", { serverId: serverKeyInput.value.trim() });
     ticketDialog.value = false;
     nameDialog.value = true;
   } catch (e) {
     $q.notify({ type: "negative", position: "top", message: String(e) });
+  } finally {
+    connecting.value = false;
+  }
+}
+
+// 环境变量配齐：自动连接并注册，无需手动输入；失败回退手动输入
+async function autoConnect(serverId: string, name: string) {
+  connecting.value = true;
+  try {
+    await invoke("init_server", { serverId });
+    await invoke("set_name", { name });
+    registeredName.value = name;
+    await loadRecords();
+    await loadNotes();
+  } catch (e) {
+    $q.notify({ type: "negative", position: "top", message: String(e) });
+    ticketDialog.value = true;
   } finally {
     connecting.value = false;
   }
@@ -427,10 +459,10 @@ async function downloadFile(item: FileNotice) {
       </q-page>
     </q-page-container>
 
-    <!-- ① Ticket 输入弹框 -->
+    <!-- ① 服务端公钥输入弹框 -->
     <TicketDialog
       v-model="ticketDialog"
-      v-model:ticket="ticketInput"
+      v-model:server-key="serverKeyInput"
       :loading="connecting"
       @submit="submitTicket"
     />

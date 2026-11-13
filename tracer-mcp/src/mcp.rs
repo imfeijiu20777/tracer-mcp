@@ -64,9 +64,9 @@ impl TracerMcp {
         })
     }
 
-    #[tool(description = "Get the connection ticket")]
-    async fn get_ticker(&self) -> String {
-        self.service.get_ticker()
+    #[tool(description = "Get the server node public key (stable node id)")]
+    async fn get_node_id(&self) -> String {
+        self.service.get_node_id()
     }
     #[tool(description = "List all currently registered users")]
     async fn user_all(&self) -> String {

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-// ① Ticket 接入弹框
+// ① 服务端公钥接入弹框
 const show = defineModel<boolean>({ required: true });
-const ticket = defineModel<string>("ticket", { required: true });
+const serverKey = defineModel<string>("serverKey", { required: true });
 defineProps<{ loading: boolean }>();
 defineEmits<{ (e: "submit"): void }>();
 </script>
@@ -10,15 +10,15 @@ defineEmits<{ (e: "submit"): void }>();
   <q-dialog v-model="show" persistent>
     <q-card class="wf-dialog">
       <q-card-section>
-        <div class="wf-dialog-title">Connect with Ticket</div>
-        <div class="wf-dialog-sub">Paste the server ticket to establish a connection</div>
+        <div class="wf-dialog-title">Connect with Server Key</div>
+        <div class="wf-dialog-sub">Paste the server node public key to establish a connection</div>
       </q-card-section>
       <q-card-section>
         <q-input
-          v-model="ticket"
+          v-model="serverKey"
           filled
           bg-color="grey-4"
-          label="ticket"
+          label="server public key"
           type="textarea"
           class="wf-input wf-ticket-input"
         />

@@ -34,7 +34,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             greet,
-            init_ticket,
+            init_server,
+            get_env_config,
             query_records,
             set_name,
             download,
@@ -55,9 +56,10 @@ fn init_tracing() {
         )
         .init();
 }
+/// 以服务端公钥建连：地址经 N0 地址发现（pkarr）解析，公钥重启不变
 #[tauri::command]
-async fn init_ticket(
-    ticket: String,
+async fn init_server(
+    server_id: String,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
@@ -66,7 +68,7 @@ async fn init_ticket(
     // blobs 存储目录放在应用数据目录下，注意要在 app 被 move 进 spawn 之前取
     let data_path = get_data_path(Role::Client);
     info!(data_path = ?data_path, "using client data path");
-    let (service, mut rx) = RecordService::new(ticket, data_path)
+    let (service, mut rx) = RecordService::new(server_id, data_path)
         .await
         .map_err(|e| e.to_string())?;
     info!("init RecordService success");
@@ -84,13 +86,35 @@ async fn init_ticket(
     Ok(())
 }
 
+/// 环境变量配置：TRACER_SERVER_ID（服务端公钥）/ TRACER_NAME（客户端名称）。
+/// 前端两者都拿到时自动连接并注册，无需手动输入；缺哪个补哪个
+#[derive(serde::Serialize)]
+struct EnvConfig {
+    server_id: Option<String>,
+    name: Option<String>,
+}
+
+#[tauri::command]
+fn get_env_config() -> EnvConfig {
+    fn var(key: &str) -> Option<String> {
+        std::env::var(key)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    }
+    EnvConfig {
+        server_id: var("TRACER_SERVER_ID"),
+        name: var("TRACER_NAME"),
+    }
+}
+
 /// 查询当前连接已接收并解析的所有消息记录
 #[tauri::command]
 async fn query_records(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<Payload>, String> {
     let guard = state.service.lock().await;
-    let service = guard.as_ref().ok_or("service not initialized, call init_ticket first")?;
+    let service = guard.as_ref().ok_or("service not initialized, call init_server first")?;
     Ok(service.query_records().await)
 }
 /// 调用设置名称
@@ -124,7 +148,7 @@ async fn download(
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
     let guard = state.service.lock().await;
-    let service = guard.as_ref().ok_or("service not initialized, call init_ticket first")?;
+    let service = guard.as_ref().ok_or("service not initialized, call init_server first")?;
     let ticket = ticker.parse::<BlobTicket>().map_err(|e| e.to_string())?;
     service
         .download(task_id, ticket, Path::new(&out_file_name))
@@ -199,7 +223,7 @@ async fn sync_notes(state: tauri::State<'_, AppState>) -> Result<Vec<ZNote>, Str
         let guard = state.service.lock().await;
         let service = guard
             .as_ref()
-            .ok_or("service not initialized, call init_ticket first")?;
+            .ok_or("service not initialized, call init_server first")?;
         service
             .sync_notes(&owner, notes)
             .await

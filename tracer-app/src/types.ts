@@ -61,3 +61,9 @@ export interface NoteNoticePayload {
   id: number;
   title: string;
 }
+
+// ---- 环境变量配置（TRACER_SERVER_ID / TRACER_NAME）----
+export interface EnvConfig {
+  server_id: string | null;
+  name: string | null;
+}

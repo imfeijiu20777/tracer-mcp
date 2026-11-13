@@ -33,15 +33,15 @@ use common::{
     payload::Payload,
 };
 use iroh::{
-    Endpoint,
+    Endpoint, EndpointId,
     endpoint::{PathEvent, presets},
 };
-use iroh_tickets::{Ticket, endpoint::EndpointTicket};
 #[derive(Debug)]
 /// 连接后的记录器
 pub struct RecordService {
     store: Store,
-    server_ticket: EndpointTicket,
+    // 服务端节点公钥：重启不变，经 N0 地址发现解析地址后建连
+    server_id: EndpointId,
     // 连接端的名称
     name: Option<String>,
     downloader: Downloader,
@@ -66,20 +66,23 @@ pub struct SyncOutcome {
 impl RecordService {
     /// 即开始创建连接
     pub async fn new(
-        ticket: String,
+        server_id: String,
         data_path: impl AsRef<Path>,
     ) -> Result<(Self, Receiver<RecordEvent>)> {
-        info!("get ticket {}", ticket);
+        info!("get server id {}", server_id);
         let (event_tx, event_rx) = mpsc::channel::<RecordEvent>(64);
         let service_event_tx = event_tx.clone();
-        let end_ticket = EndpointTicket::decode_string(&ticket)?;
+        // 解析公钥（hex 或 z-base-32）；具体地址在 connect 时经 N0 地址发现解析
+        let server_id = server_id
+            .parse::<EndpointId>()
+            .map_err(|e| anyhow::anyhow!("invalid server public key: {e}"))?;
         let store = FsStore::load(data_path).await?;
         let endpoint = Endpoint::bind(presets::N0).await?;
         let downloader: Downloader = Downloader::new(store.as_ref(), &endpoint);
         endpoint.online().await;
         // 注意：这里只是本地 endpoint上线，不是与对端建立连接
         info!(local_id = %endpoint.id(), "local endpoint online, connecting to peer");
-        let connection = match endpoint.connect(end_ticket.clone(), MESSAGE_ALPN).await {
+        let connection = match endpoint.connect(server_id, MESSAGE_ALPN).await {
             Ok(c) => c,
             Err(e) => {
                 warn!(error = %e, "endpoint.connect failed, closing local endpoint");
@@ -236,7 +239,7 @@ impl RecordService {
             Self {
                 downloader,
                 store: Store::from(store),
-                server_ticket: end_ticket,
+                server_id,
                 name: None,
                 write: framed.write,
                 endpoint,
@@ -267,7 +270,7 @@ impl RecordService {
     pub async fn sync_notes(&self, owner: &str, local: Vec<ZNote>) -> Result<SyncOutcome> {
         let connection = self
             .endpoint
-            .connect(self.server_ticket.clone(), NOTE_ALPN)
+            .connect(self.server_id, NOTE_ALPN)
             .await?;
         let bi = connection.open_bi().await?;
         let mut framed = FramedBiStream::new(bi);
