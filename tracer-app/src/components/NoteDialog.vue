@@ -40,6 +40,7 @@ defineEmits<{ (e: "submit"): void }>();
         />
       </q-card-section>
       <q-card-actions align="right">
+        <q-btn v-close-popup flat label="Cancel" color="black" />
         <q-btn
           label="Save"
           color="black"

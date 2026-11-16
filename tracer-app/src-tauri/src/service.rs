@@ -42,8 +42,6 @@ pub struct RecordService {
     store: Store,
     // 服务端节点公钥：重启不变，经 N0 地址发现解析地址后建连
     server_id: EndpointId,
-    // 连接端的名称
-    name: Option<String>,
     downloader: Downloader,
     // 写端
     write: WriteHalf,
@@ -240,7 +238,6 @@ impl RecordService {
                 downloader,
                 store: Store::from(store),
                 server_id,
-                name: None,
                 write: framed.write,
                 endpoint,
                 record_vec: record_vec,
@@ -332,6 +329,8 @@ impl RecordService {
 
     /// 显式优雅关闭服务，释放 Endpoint 资源
     /// 在不再需要 RecordService 时（如窗口关闭 / 主动断开）应调用此方法
+    /// 当前未启用调用点，保留给未来的窗口关闭 / 主动断开处理使用
+    #[allow(dead_code)]
     pub async fn shutdown(&self) {
         info!("shutting down RecordService endpoint...");
         self.endpoint.close().await;

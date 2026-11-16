@@ -32,6 +32,7 @@ function preview(content: string): string {
         text-color="white"
         unelevated
         dense
+        padding="4px 16px"
         @click="$emit('add')"
       />
       <q-btn
@@ -41,6 +42,7 @@ function preview(content: string): string {
         text-color="white"
         unelevated
         dense
+        padding="4px 16px"
         :disable="!connected"
         :loading="syncing"
         @click="$emit('sync')"

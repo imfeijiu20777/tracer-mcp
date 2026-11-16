@@ -34,52 +34,50 @@ impl ProtocolHandler for NodeManage {
         };
         let mut framed = FramedBiStream::new(bi);
         let conn: Arc<Mutex<rusqlite::Connection>> = self.conn.clone();
+        // 把 connection 移入 task，用 connection.closed() 做可靠的断连检测
         tokio::spawn(async move {
             // 每连接一个两阶段同步会话：累积元数据/差异分块
             let mut session = SyncSession::default();
             loop {
-                // 读一条消息
-                let msg: Envelope = match recv_msg(&mut framed.read).await {
-                    Ok(msg) => msg,
-                    Err(e) => {
-                        // 从 anyhow::Error 里取出原始错误，判断是不是 IO 层的断流
-                        let is_stream_dead = e
-                            .downcast_ref::<std::io::Error>()
-                            .map(|io| {
-                                matches!(
-                                    io.kind(),
-                                    std::io::ErrorKind::UnexpectedEof
-                                        | std::io::ErrorKind::BrokenPipe
-                                        | std::io::ErrorKind::ConnectionReset
-                                )
-                            })
-                            .unwrap_or(false);
+                tokio::select! {
+                    biased;
 
-                        if is_stream_dead {
-                            tracing::info!("流已关闭: {e}");
-                            break; // 真断流：退出任务
-                        }
-                        // 只是这一帧坏了（解码失败等）：记日志，收下一帧
-                        tracing::warn!("单条消息损坏，跳过: {e}");
-                        continue;
-                    }
-                };
-                // 先在锁内同步构造响应并释放锁，再异步发送。
-                // rusqlite::Connection 是 Send 但不是 Sync，db 引用不能跨 await 持有，
-                // 否则 tokio::spawn 要求整个 future 为 Send 会编译失败
-                let resps = {
-                    let db = conn.lock().await;
-                    handle_request(&db, &mut session, &msg)
-                };
-                match resps {
-                    Ok(resps) => {
-                        for resp in resps {
-                            if let Err(e) = send_msg(&mut framed.write, &resp).await {
-                                tracing::warn!("发送响应失败: {e}");
+                    // 1. 读一条消息
+                    msg_result = recv_msg::<Envelope>(&mut framed.read) => {
+                        match msg_result {
+                            Ok(msg) => {
+                                // 先在锁内同步构造响应并释放锁，再异步发送。
+                                // rusqlite::Connection 是 Send 但不是 Sync，db 引用不能跨 await 持有，
+                                // 否则 tokio::spawn 要求整个 future 为 Send 会编译失败
+                                let resps = {
+                                    let db = conn.lock().await;
+                                    handle_request(&db, &mut session, &msg)
+                                };
+                                match resps {
+                                    Ok(resps) => {
+                                        for resp in resps {
+                                            if let Err(e) = send_msg(&mut framed.write, &resp).await {
+                                                tracing::warn!("发送响应失败: {e}");
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    Err(e) => tracing::warn!("处理请求失败: {e}"),
+                                }
+                            }
+                            Err(e) => {
+                                // 流上的任何错误（EOF、断连、解码失败）都视为该流不可恢复，退出
+                                tracing::info!("连接流结束: {e}");
+                                break;
                             }
                         }
                     }
-                    Err(e) => tracing::warn!("处理请求失败: {e}"),
+
+                    // 2. 整条 QUIC 连接关闭：权威断连信号
+                    _err = connection.closed() => {
+                        tracing::info!("QUIC 连接已关闭，退出 note 同步任务");
+                        break;
+                    }
                 }
             }
         });

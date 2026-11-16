@@ -5,8 +5,8 @@ use std::{path::Path, sync::Arc};
 use tracing_subscriber::EnvFilter;
 use crate::service::RecordService;
 use common::{Role, get_data_path, note_obj::ZNote, payload::Payload, simpledb};
-use tauri::{Emitter, Manager};
-use tracing::{debug,info,warn};
+use tauri::Emitter;
+use tracing::info;
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 mod service;
 #[tauri::command]
